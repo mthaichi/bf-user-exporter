@@ -1,0 +1,10 @@
+{
+  "name": "bf-user-export",
+  "version": "1.0.0",
+  "scripts": {
+    "zip": "rimraf dist && mkdir dist && zip -r dist/bf-user-export.zip . -x '.*' 'package.json' 'package-lock.json' 'node_modules/*' 'dist/*'"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.5"
+  }
+}
