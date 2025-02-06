@@ -13,8 +13,11 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+require_once plugin_dir_path(__FILE__) . 'inc/class-crypt.php';
+
 class BF_User_Exporter {
     private $default_fields = "ID\nuser_login\nuser_email\nfirst_name\nlast_name";
+    private $default_crypt_key = '';
 
     public function __construct() {
         add_action('admin_menu', array($this, 'add_admin_menu'));
@@ -28,6 +31,9 @@ class BF_User_Exporter {
         // 初期値が設定されていない場合のみ設定
         if (get_option('bf_user_export_fields') === false) {
             update_option('bf_user_export_fields', $this->default_fields);
+        }
+        if (get_option('bf_user_export_crypt_key') === false) {
+            update_option('bf_user_export_crypt_key', $this->default_crypt_key);
         }
     }
 
@@ -62,6 +68,15 @@ class BF_User_Exporter {
                             カスタムフィールドはフィールド名をそのまま入力してください。</p>
                         </td>
                     </tr>
+                    <tr>
+                        <th scope="row">
+                            <label for="crypt_key">復号化キー</label>
+                        </th>
+                        <td>
+                            <input type="text" name="crypt_key" id="crypt_key" value="<?php echo esc_attr($this->get_crypt_key()); ?>" class="regular-text">
+                            <p class="description">復号化に使用するキーを設定してください。変更すると既存の暗号化データが復号できなくなります。</p>
+                        </td>
+                    </tr>
                 </table>
                 <?php submit_button('設定を保存', 'primary', 'save_fields'); ?>
                 <?php submit_button('CSVエクスポート', 'secondary', 'export_csv'); ?>
@@ -79,6 +94,15 @@ class BF_User_Exporter {
         return $fields;
     }
 
+    private function get_crypt_key() {
+        $key = get_option('bf_user_export_crypt_key');
+        if (empty($key)) {
+            $key = $this->default_crypt_key;
+            update_option('bf_user_export_crypt_key', $key);
+        }
+        return $key;
+    }
+
     public function handle_export() {
         if (isset($_POST['save_fields']) && check_admin_referer('bf_user_export_nonce', 'bf_user_export_nonce')) {
             $fields = sanitize_textarea_field($_POST['export_fields']);
@@ -86,6 +110,12 @@ class BF_User_Exporter {
                 $fields = $this->default_fields;
             }
             update_option('bf_user_export_fields', $fields);
+
+            $crypt_key = sanitize_text_field($_POST['crypt_key']);
+            if (!empty($crypt_key)) {
+                update_option('bf_user_export_crypt_key', $crypt_key);
+            }
+
             add_settings_error('bf_user_exporter', 'settings_updated', '設定を保存しました。', 'updated');
         }
 
@@ -115,18 +145,33 @@ class BF_User_Exporter {
             $data[] = $fields;
 
             // ユーザーデータを取得
+            $crypt = new BF_User_Exporter_Crypt();
             foreach ($users as $user) {
                 $user_data = array();
                 foreach ($fields as $field) {
                     $field = trim($field);
                     if (empty($field)) continue;
 
+                    // 暗号化フィールドのチェック
+                    $is_encrypted = false;
+                    if (strpos($field, '*') === 0) {
+                        $is_encrypted = true;
+                        $field = substr($field, 1); // '*'を除去
+                    }
+
                     if (in_array($field, array('ID', 'user_login', 'user_email', 'first_name', 'last_name', 'display_name', 'user_registered'))) {
-                        $user_data[] = isset($user->$field) ? $user->$field : '';
+                        $value = isset($user->$field) ? $user->$field : '';
                     } else {
                         $meta_value = get_user_meta($user->ID, $field, true);
-                        $user_data[] = is_array($meta_value) ? json_encode($meta_value, JSON_UNESCAPED_UNICODE) : $meta_value;
+                        $value = is_array($meta_value) ? json_encode($meta_value, JSON_UNESCAPED_UNICODE) : $meta_value;
                     }
+
+                    // 暗号化フィールドの場合は復号化
+                    if ($is_encrypted && !empty($value)) {
+                        $value = $crypt->decrypt($value);
+                    }
+
+                    $user_data[] = $value;
                 }
                 $data[] = $user_data;
             }
